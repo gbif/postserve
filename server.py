@@ -35,8 +35,11 @@ def GeneratePrepared(layers):
     print(prepared)
     return(prepared)
 
-layers = GetTM2Source("/mapping/data.yml")
+#layers = GetTM2Source("/mapping/data.yml")
+layers = GetTM2Source('/home/mblissett/Workspace/openmaptiles/build/openmaptiles.tm2source/data.yml')
 prepared = GeneratePrepared(layers)
+print prepared
+print
 engine = create_engine('postgresql://'+os.getenv('POSTGRES_USER','openmaptiles')+':'+os.getenv('POSTGRES_PASSWORD','openmaptiles')+'@'+os.getenv('POSTGRES_HOST','postgres')+':'+os.getenv('POSTGRES_PORT','5432')+'/'+os.getenv('POSTGRES_DB','openmaptiles'))
 inspector = inspect(engine)
 DBSession = sessionmaker(bind=engine)
@@ -44,23 +47,38 @@ session = DBSession()
 session.execute(prepared)
 
 def bounds(zoom,x,y):
-    inProj = pyproj.Proj(init='epsg:4326')
-    outProj = pyproj.Proj(init='epsg:3857')
-    lnglatbbox = mercantile.bounds(x,y,zoom)
-    ws = (pyproj.transform(inProj,outProj,lnglatbbox[0],lnglatbbox[1]))
-    en = (pyproj.transform(inProj,outProj,lnglatbbox[2],lnglatbbox[3]))
+    #inProj = pyproj.Proj(init='epsg:3575')
+    #outProj = pyproj.Proj(init='epsg:3575')
+    #lnglatbbox = mercantile.bounds(x,y,zoom)
+    #ws = (pyproj.transform(inProj,outProj,lnglatbbox[0],lnglatbbox[1]))
+    #en = (pyproj.transform(inProj,outProj,lnglatbbox[2],lnglatbbox[3]))
+
+    map_width_in_metres = 2 * 2**0.5*6371007.2
+    #tile_width_in_pixels = 512.0
+    #standardized_pixel_size = 0.00028
+    #map_width_in_pixels = tile_width_in_pixels*(2.0**zoom)
+
+    tiles_across = 2**zoom
+
+    x = x - 2**(zoom-1)
+    y = -(y - 2**(zoom-1)) - 1
+
+    tile_width_in_metres = (map_width_in_metres / tiles_across)
+    ws = (x*tile_width_in_metres, (y+1)*tile_width_in_metres)
+    en = ((x+1)*tile_width_in_metres, (y)*tile_width_in_metres)
+
     return {'w':ws[0],'s':ws[1],'e':en[0],'n':en[1]}
 
 def zoom_to_scale_denom(zoom):						# For !scale_denominator!
     # From https://github.com/openstreetmap/mapnik-stylesheets/blob/master/zoom-to-scale.txt
-    map_width_in_metres = 40075016.68557849
-    tile_width_in_pixels = 256.0
+    map_width_in_metres = 2 * 2**0.5*6371007.2
+    tile_width_in_pixels = 512.0
     standardized_pixel_size = 0.00028
     map_width_in_pixels = tile_width_in_pixels*(2.0**zoom)
     return str(map_width_in_metres/(map_width_in_pixels * standardized_pixel_size))
 
-def replace_tokens(query,s,w,n,e,scale_denom):
-    return query.replace("!bbox!","ST_MakeBox2D(ST_Point("+w+", "+s+"), ST_Point("+e+", "+n+"))").replace("!scale_denominator!",scale_denom).replace("!pixel_width!","256").replace("!pixel_height!","256")
+def replace_tokens(query,s,w,n,e,scale_denom,z):
+    return query.replace("!bbox!","ST_SetSRID(ST_MakeBox2D(ST_Point("+w+", "+s+"), ST_Point("+e+", "+n+")), 3575)").replace("!scale_denominator!",scale_denom).replace("!pixel_width!","512").replace("!pixel_height!","512")
 
 def get_mvt(zoom,x,y):
     try:								# Sanitize the inputs
@@ -74,13 +92,15 @@ def get_mvt(zoom,x,y):
     tilebounds = bounds(sani_zoom,sani_x,sani_y)
     s,w,n,e = str(tilebounds['s']),str(tilebounds['w']),str(tilebounds['n']),str(tilebounds['e'])
     final_query = "EXECUTE gettile(!bbox!, !scale_denominator!, !pixel_width!, !pixel_height!);"
-    sent_query = replace_tokens(final_query,s,w,n,e,scale_denom)
+    sent_query = replace_tokens(final_query,s,w,n,e,scale_denom,sani_zoom)
     response = list(session.execute(sent_query))
+    print
+    print (sani_zoom, sani_x, sani_y)
     print(sent_query)
     layers = filter(None,list(itertools.chain.from_iterable(response)))
     final_tile = b''
     for layer in layers:
-        final_tile = final_tile + io.BytesIO(layer).getvalue() 
+        final_tile = final_tile + io.BytesIO(layer).getvalue()
     return final_tile
 
 class GetTile(tornado.web.RequestHandler):
@@ -94,7 +114,7 @@ class GetTile(tornado.web.RequestHandler):
 def m():
     if __name__ == "__main__":
         # Make this prepared statement from the tm2source
-        application = tornado.web.Application([(r"/tiles/([0-9]+)/([0-9]+)/([0-9]+).pbf", GetTile)])
+        application = tornado.web.Application([(r"/EPSG:3575/([0-9]+)/([0-9]+)/([0-9]+).pbf", GetTile)])
         print("Postserve started..")
         application.listen(8080)
         tornado.ioloop.IOLoop.instance().start()
