@@ -37,32 +37,6 @@ function createDensityStyle2() {
     };
 }
 
-function createStatsStyle() {
-        var fill = new ol.style.Fill({color: '#000000'});
-        var stroke = new ol.style.Stroke({color: '#000000', width: 1});
-        var text = new ol.style.Text({
-                text: 'XYXYXY',
-		fill: fill,
-		stroke: stroke,
-		font: '16px "Open Sans", "Arial Unicode MS"'
-        });
-
-
-	var styles = [];
-	return function(feature, resolution) {
-		var length = 0;
-		//console.log(feature);
-		text.setText('Occurrences: '+feature.get('total'));
-		console.log(feature.get('total'));
-		styles[length++] = new ol.style.Style({
-			stroke: new ol.style.Stroke({color: '#000000'}),
-			text: text
-		});
-		styles.length = length;
-		return styles;
-	};
-}
-
 var tileGrid = new ol.tilegrid.TileGrid({
     extent: ol.proj.get('EPSG:4326').getExtent(),
     minZoom: 0,
@@ -77,7 +51,7 @@ layers['EPSG:4326'] = new ol.layer.VectorTile({
 	format: new ol.format.MVT(),
 	tileGrid: tileGrid,
 	tilePixelRatio: 8,
-	url: 'http://mb.gbif.org:8080/tiles/{z}_{x}_{y}.pbf',
+	url: '/tiles/{z}_{x}_{y}.pbf',
         wrapX: false
     }),
     style: createStyle(),

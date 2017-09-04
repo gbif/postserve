@@ -188,7 +188,10 @@ class GetTile(tornado.web.RequestHandler):
 def m():
     if __name__ == "__main__":
         # Make this prepared statement from the tm2source
-        application = tornado.web.Application([(r"/tiles/([0-9]+)_([0-9]+)_([0-9]+).pbf", GetTile)])
+        application = tornado.web.Application([
+            (r"/tiles/([0-9]+)[/_]([0-9]+)[/_]([0-9]+).pbf", GetTile),
+            (r"/([^/]*)", tornado.web.StaticFileHandler, {"path": "./static", "default_filename": "index.html"})
+        ])
 
         server = tornado.httpserver.HTTPServer(application)
         server.bind(8080)
