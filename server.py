@@ -49,6 +49,13 @@ def GeneratePrepared(layers):
 
 layers = GetTM2Source("/mapping/data.yml")
 prepared = GeneratePrepared(layers)
+connection_string = 'postgresql://'+os.getenv('POSTGRES_USER','openmaptiles')+':'+os.getenv('POSTGRES_PASSWORD','openmaptiles')+'@'+os.getenv('POSTGRES_HOST','postgres')+':'+os.getenv('POSTGRES_PORT','5432')+'/'+os.getenv('POSTGRES_DB','openmaptiles')
+engine = create_engine(connection_string)
+inspector = inspect(engine)
+DBSession = sessionmaker(bind=engine)
+session = DBSession()
+print("Running prepare statement")
+session.execute(prepared)
 
 def bounds(zoom,x,y,buff):
     #inProj = pyproj.Proj(init='epsg:3575')
@@ -111,79 +118,45 @@ def replace_tokens(query,tilebounds,buffered_tilebounds,scale_denom,z):
 
     return start
 
+def get_mvt(zoom,x,y):
+    try:								# Sanitize the inputs
+        sani_zoom,sani_x,sani_y = float(zoom),float(x),float(y)
+        del zoom,x,y
+    except:
+        print('suspicious')
+        return 1
+
+    scale_denom = zoom_to_scale_denom(sani_zoom)
+    tilebounds = bounds(sani_zoom,sani_x,sani_y,0)
+
+    buffered_tilebounds = []
+    chunk = ""
+    for buffer_size in buffer_sizes:
+        t = bounds(sani_zoom,sani_x,sani_y,int(buffer_size)/512.0)
+        buffered_tilebounds.append(t)
+
+        chunk = chunk + ", !bbox_"+buffer_size+"_buffer!"
+
+    final_query = "EXECUTE gettile(!bbox!, !scale_denominator!, !pixel_width!, !pixel_height!"+chunk+");"
+    sent_query = replace_tokens(final_query,tilebounds,buffered_tilebounds,scale_denom,sani_zoom)
+    print('Final query', sent_query)
+    response = list(session.execute(sent_query))
+    print (sani_zoom, sani_x, sani_y)
+    print(sent_query)
+    layers = filter(None,list(itertools.chain.from_iterable(response)))
+    final_tile = b''
+    for layer in layers:
+        final_tile = final_tile + io.BytesIO(layer).getvalue()
+    return final_tile
+
 class GetTile(tornado.web.RequestHandler):
 
     def get(self, zoom,x,y):
-        engine = create_engine('postgresql://'+os.getenv('POSTGRES_USER','openmaptiles')+':'+os.getenv('POSTGRES_PASSWORD','openmaptiles')+'@'+os.getenv('POSTGRES_HOST','postgres')+':'+os.getenv('POSTGRES_PORT','5432')+'/'+os.getenv('POSTGRES_DB','openmaptiles'))
-        inspector = inspect(engine)
-        DBSession = sessionmaker(bind=engine)
-        self.session = DBSession()
-        print("Running prepare statement")
-        self.session.execute(prepared)
-
         self.set_header("Content-Type", "application/x-protobuf")
         self.set_header("Content-Disposition", "attachment")
         self.set_header("Access-Control-Allow-Origin", "*")
-        response = self.get_mvt(zoom,x,y)
-
-        self.session.close()
-
-        #self.write(response)
-
-    def get_mvt(self, zoom,x,y):
-        try:								# Sanitize the inputs
-            sani_zoom,sani_x,sani_y = float(zoom),float(x),float(y)
-            del zoom,x,y
-        except:
-            print('suspicious')
-            return 1
-
-        scale_denom = zoom_to_scale_denom(sani_zoom)
-        tilebounds = bounds(sani_zoom,sani_x,sani_y,0)
-        #s_nobuffer,w_nobuffer,n_nobuffer,e_nobuffer = str(tilebounds_nobuffer['s']),str(tilebounds_nobuffer['w']),str(tilebounds_nobuffer['n']),str(tilebounds_nobuffer['e'])
-
-        #tilebounds = bounds(sani_zoom,sani_x,sani_y,0.50)
-        #s,w,n,e = str(tilebounds['s']),str(tilebounds['w']),str(tilebounds['n']),str(tilebounds['e'])
-
-        buffered_tilebounds = []
-        chunk = ""
-        for buffer_size in buffer_sizes:
-            t = bounds(sani_zoom,sani_x,sani_y,int(buffer_size)/512.0)
-            buffered_tilebounds.append(t)
-
-            chunk = chunk + ", !bbox_"+buffer_size+"_buffer!"
-
-        final_query = "EXECUTE gettile(!bbox!, !scale_denominator!, !pixel_width!, !pixel_height!"+chunk+");"
-        sent_query = replace_tokens(final_query,tilebounds,buffered_tilebounds,scale_denom,sani_zoom)
-        print('Final query', sent_query)
-        response = list(self.session.execute(sent_query))
-        print (sani_zoom, sani_x, sani_y)
-        print(sent_query)
-        layers = filter(None,list(itertools.chain.from_iterable(response)))
-        final_tile = b''
-        for layer in layers:
-            final_tile = final_tile + io.BytesIO(layer).getvalue()
-        self.write(final_tile)
-        #return final_tile
-
-# Buffers
-# aeroway.yaml:  buffer_size: 4
-# boundary.yaml:  buffer_size: 4
-# building.yaml:  buffer_size: 4
-# landcover.yaml:  buffer_size: 4
-# landuse.yaml:  buffer_size: 4
-# park.yaml:  buffer_size: 4
-# transportation.yaml:  buffer_size: 4
-# water.yaml:  buffer_size: 4
-# waterway.yaml:  buffer_size: 4
-# housenumber.yaml:  buffer_size: 8
-# transportation_name.yaml:  buffer_size: 8
-# graticules.yaml:  buffer_size: 64
-# mountain_peak.yaml:  buffer_size: 64
-# poi.yaml:  buffer_size: 64
-# place.yaml:  buffer_size: 256
-# water_name.yaml:  buffer_size: 256
-# Need 4/256, 8/256, 64/256 and 256/256
+        response = get_mvt(zoom,x,y)
+        self.write(response)
 
 def m():
     if __name__ == "__main__":
@@ -195,9 +168,10 @@ def m():
 
         server = tornado.httpserver.HTTPServer(application)
         server.bind(8080)
-        server.start(0)
+        server.start(1)
         print("Postserve started..")
         #application.listen(8080)
+
         tornado.ioloop.IOLoop.instance().start()
 
 m()
