@@ -1,0 +1,32 @@
+#!/bin/bash
+
+if [[ -z $PROCESS_COUNT ]]; then
+    PROCESS_COUNT=$(grep ^processor /proc/cpuinfo | wc -l)
+fi
+
+if [[ "$VERBOSE" = "true" ]]; then
+    rm -Rfv logs
+    mkdir -p logs
+    out=logs/consumer_$$.log
+else
+    out=/dev/null
+fi
+
+while :; do
+
+    if [[ $(pgrep -c -f queue_$PROJECTION.py) -lt $PROCESS_COUNT ]]; then
+        echo "Only" $(pgrep -c -f queue_$PROJECTION.py) "processes, starting another"
+
+        nohup nice -n 5 python queue_$PROJECTION.py &> $out < /dev/null &
+        pid=$!
+        echo "Consumer started, pid $pid"
+        sleep 0.1
+        [[ -f $out ]] && mv $out logs/consumer_$pid.log || echo "No $out logfile yet"
+    else
+        pgrep -a -f queue_$PROJECTION.py
+        sleep 15
+        exit
+    fi
+
+    sleep 5
+done

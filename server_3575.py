@@ -17,6 +17,7 @@ import pyproj
 import yaml
 import sys
 import itertools
+import re
 
 def GetTM2Source(file):
     with open(file,'r') as stream:
@@ -29,14 +30,21 @@ def GeneratePrepared(layers):
     queries = []
     for layer in layers['Layer']:
         buffer_size = str(layer['properties']['buffer-size']*2)
+        geometry_field = str(layer['Datasource']['geometry_field'])
         if (buffer_size not in buffer_sizes):
             buffer_sizes.append(buffer_size)
         layer_query = layer['Datasource']['table'].lstrip().rstrip()	# Remove lead and trailing whitespace
         layer_query = layer_query[1:len(layer_query)-6]			# Remove enough characters to remove first and last () and "AS t"
-        layer_query = layer_query.replace("geometry", "ST_AsMVTGeom(geometry,!bbox_nobuffer!,4096,"+buffer_size+",true) AS mvtgeometry")
+        layer_query = layer_query.replace(geometry_field, "ST_AsMVTGeom("+geometry_field+",!bbox_nobuffer!,4096,"+buffer_size+",true) AS mvtgeometry", 1)
         layer_query = layer_query.replace("!bbox!", "!bbox_"+buffer_size+"_buffer!")
-        base_query = "SELECT ST_ASMVT('"+layer['id']+"', 4096, 'mvtgeometry', tile) FROM ("+layer_query+" WHERE ST_AsMVTGeom(geometry,!bbox_nobuffer!,4096,"+buffer_size+",true) IS NOT NULL) AS tile"
+        print('for re1',layer_query)
+        layer_query = re.sub(r"(layer_[a-z_]*)", r"\1_3575", layer_query)
+        layer_query = re.sub(r" z\(", r" z_3575(", layer_query)
+        print('for re2',layer_query)
+        and_or_where = 'AND' if 'WHERE' in layer_query else 'WHERE'
+        base_query = "SELECT ST_ASMVT('"+layer['id']+"', 4096, 'mvtgeometry', tile) FROM ("+layer_query+" "+and_or_where+" ST_AsMVTGeom("+geometry_field+",!bbox_nobuffer!,4096,"+buffer_size+",true) IS NOT NULL) AS tile"
         queries.append(base_query.replace("!bbox_nobuffer!","$1").replace("!scale_denominator!","$2").replace("!pixel_width!","$3").replace("!pixel_height!","$4").replace("!bbox_"+buffer_size+"_buffer!", "$"+str(buffer_sizes.index(buffer_size)+5)))
+        print (base_query)
 
     chunk = ""
     for buffer_size in buffer_sizes:
@@ -47,6 +55,7 @@ def GeneratePrepared(layers):
     print(prepared)
     return(prepared)
 
+print("Starting up")
 layers = GetTM2Source("/mapping/data.yml")
 prepared = GeneratePrepared(layers)
 connection_string = 'postgresql://'+os.getenv('POSTGRES_USER','openmaptiles')+':'+os.getenv('POSTGRES_PASSWORD','openmaptiles')+'@'+os.getenv('POSTGRES_HOST','postgres')+':'+os.getenv('POSTGRES_PORT','5432')+'/'+os.getenv('POSTGRES_DB','openmaptiles')
@@ -58,14 +67,15 @@ print("Running prepare statement")
 session.execute(prepared)
 
 def bounds(zoom,x,y,buff):
-    #inProj = pyproj.Proj(init='epsg:3575')
+    print('Tile',zoom,x,y,'with buffer',buff)
+    #inProj = pyproj.Proj(init='epsg:4326')
     #outProj = pyproj.Proj(init='epsg:3575')
     #lnglatbbox = mercantile.bounds(x,y,zoom)
     #ws = (pyproj.transform(inProj,outProj,lnglatbbox[0],lnglatbbox[1]))
     #en = (pyproj.transform(inProj,outProj,lnglatbbox[2],lnglatbbox[3]))
 
-    #map_width_in_metres = 2 * 2**0.5*6371007.2
-    map_width_in_metres = 180.0
+    map_width_in_metres = 2 * 2**0.5*6371007.2
+    #map_width_in_metres = 180.0
     #tile_width_in_pixels = 512.0
     #standardized_pixel_size = 0.00028
     #map_width_in_pixels = tile_width_in_pixels*(2.0**zoom)
@@ -73,12 +83,12 @@ def bounds(zoom,x,y,buff):
     tiles_down = 2**(zoom)
     tiles_across = 2**(zoom)
 
-    #arc x = x - 2**(zoom-1)
-    #arctic y = -(y - 2**(zoom-1)) - 1
-    x = x - 2**(zoom)
-    y = -(y - 2**(zoom)) - 1 - 2**(zoom-1)
+    x = x - 2**(zoom-1)
+    y = -(y - 2**(zoom-1)) - 1
+    #x = x - 2**(zoom)
+    #y = -(y - 2**(zoom)) - 1 - 2**(zoom-1)#
 
-    print(x, y);
+    #print(x, y);
 
     tile_width_in_metres = (map_width_in_metres / tiles_across)
     tile_height_in_metres = (map_width_in_metres / tiles_down)
@@ -95,9 +105,9 @@ def bounds(zoom,x,y,buff):
 
 def zoom_to_scale_denom(zoom):						# For !scale_denominator!
     # From https://github.com/openstreetmap/mapnik-stylesheets/blob/master/zoom-to-scale.txt
-    #map_width_in_metres = 2 * 2**0.5*6371007.2 # Arctic
+    map_width_in_metres = 2 * 2**0.5*6371007.2 # Arctic
     #map_width_in_metres = 180.0
-    map_width_in_metres = 40075016.68557849
+    #map_width_in_metres = 40075016.68557849
     tile_width_in_pixels = 512.0 # This asks for a zoom level higher, since the tiles are doubled.
     standardized_pixel_size = 0.00028
     map_width_in_pixels = tile_width_in_pixels*(2.0**zoom)
@@ -106,7 +116,7 @@ def zoom_to_scale_denom(zoom):						# For !scale_denominator!
 def replace_tokens(query,tilebounds,buffered_tilebounds,scale_denom,z):
     s,w,n,e = str(tilebounds['s']),str(tilebounds['w']),str(tilebounds['n']),str(tilebounds['e'])
 
-    start = query.replace("!bbox!","ST_SetSRID(ST_MakeBox2D(ST_Point("+w+", "+s+"), ST_Point("+e+", "+n+")), 4326)").replace("!scale_denominator!",scale_denom).replace("!pixel_width!","512").replace("!pixel_height!","512")
+    start = query.replace("!bbox!","ST_SetSRID(ST_MakeBox2D(ST_Point("+w+", "+s+"), ST_Point("+e+", "+n+")), 3575)").replace("!scale_denominator!",scale_denom).replace("!pixel_width!","512").replace("!pixel_height!","512")
 
     for buffer_size in buffer_sizes:
         token = "!bbox_"+buffer_size+"_buffer!"
@@ -114,7 +124,7 @@ def replace_tokens(query,tilebounds,buffered_tilebounds,scale_denom,z):
 
         t = buffered_tilebounds[idx]
         s,w,n,e = str(t['s']),str(t['w']),str(t['n']),str(t['e'])
-        start = start.replace(token,"ST_SetSRID(ST_MakeBox2D(ST_Point("+w+", "+s+"), ST_Point("+e+", "+n+")), 4326)")
+        start = start.replace(token,"ST_SetSRID(ST_MakeBox2D(ST_Point("+w+", "+s+"), ST_Point("+e+", "+n+")), 3575)")
 
     return start
 
@@ -139,10 +149,8 @@ def get_mvt(zoom,x,y):
 
     final_query = "EXECUTE gettile(!bbox!, !scale_denominator!, !pixel_width!, !pixel_height!"+chunk+");"
     sent_query = replace_tokens(final_query,tilebounds,buffered_tilebounds,scale_denom,sani_zoom)
-    print('Final query', sent_query)
+    print(sani_zoom, sani_x, sani_y, sent_query)
     response = list(session.execute(sent_query))
-    print (sani_zoom, sani_x, sani_y)
-    print(sent_query)
     layers = filter(None,list(itertools.chain.from_iterable(response)))
     final_tile = b''
     for layer in layers:
@@ -162,8 +170,8 @@ def m():
     if __name__ == "__main__":
         # Make this prepared statement from the tm2source
         application = tornado.web.Application([
-            (r"/tiles/([0-9]+)[/_]([0-9]+)[/_]([0-9]+).pbf", GetTile),
-            (r"/([^/]*)", tornado.web.StaticFileHandler, {"path": "./static", "default_filename": "index.html"})
+            (r"/[a-z/]+/([0-9]+)[/_]([0-9]+)[/_]([0-9]+).pbf", GetTile),
+            (r"/([^/]*)", tornado.web.StaticFileHandler, {"path": "./static", "default_filename": "index_3575.html"})
         ])
 
         server = tornado.httpserver.HTTPServer(application)

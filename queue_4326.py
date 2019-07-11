@@ -1,5 +1,6 @@
-import server
+import server_4326
 
+import os
 import pika
 from msgpack import packb
 import signal
@@ -60,8 +61,7 @@ def makeTile(ch, method, properties, data):
                 break
 
             print('Failed', coord, file=sys.stderr)
-            global dud_channel
-            dud_channel.basic_publish(exchange='', routing_key=failed_queue_name, body=data)
+            mq_dud_channel.basic_publish(exchange='', routing_key=failed_queue_name, body=data)
             ch.basic_nack(delivery_tag = method.delivery_tag, requeue=False)
             # MAX_ERRORS?
             #if not error_list:
@@ -87,8 +87,8 @@ def exit_handler(signal, frame):
 
 def m():
     if __name__ == "__main__":
-        mq_credentials = pika.PlainCredentials(os.getenv('MQ_USER','mblissett'), os.getenv('MQ_PASSWORD','mblissett'))
-        mq_connection = pika.BlockingConnection(pika.ConnectionParameters(os.getenv('MQ_HOST','mq.gbif.org'), os.getenv('MQ_PORT','5672'), os.getenv('MQ_VHOST','/users/mblissett'), mq_credentials))
+        mq_credentials = pika.PlainCredentials(os.getenv('MQ_USER','mblissett'), os.getenv('MQ_PASSWORD','xxxxxx'))
+        mq_connection = pika.BlockingConnection(pika.ConnectionParameters(os.getenv('MQ_HOST','mq.gbif.org'), int(os.getenv('MQ_PORT','5672')), os.getenv('MQ_VHOST','/users/mblissett'), mq_credentials))
 
         global mq_done_channel
         mq_done_channel = mq_connection.channel()
